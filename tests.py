@@ -360,6 +360,40 @@ class TestIntentParserFR(unittest.TestCase):
         self.assertIsNone(IntentParserFR.parse("quel temps fait-il ?"))
         self.assertIsNone(IntentParserFR.parse(""))
 
+    def test_multi_column_avec(self):
+        result = IntentParserFR.parse("recherche 723 dans Invoice avec Alice dans Name")
+        self.assertIsNotNone(result)
+        self.assertIn("multi_criteria", result)
+        self.assertEqual(len(result["multi_criteria"]), 2)
+        self.assertEqual(result["multi_criteria"][0]["value"], 723)
+        self.assertEqual(result["multi_criteria"][0]["column"], "Invoice")
+        self.assertEqual(result["multi_criteria"][1]["value"], "Alice")
+        self.assertEqual(result["multi_criteria"][1]["column"], "Name")
+
+    def test_multi_column_contenant_la_valeur(self):
+        result = IntentParserFR.parse("recherche 1001 dans Invoice contenant la valeur Alice dans Name")
+        self.assertIsNotNone(result)
+        self.assertIn("multi_criteria", result)
+        self.assertEqual(len(result["multi_criteria"]), 2)
+        self.assertEqual(result["multi_criteria"][0]["value"], 1001)
+        self.assertEqual(result["multi_criteria"][0]["column"], "Invoice")
+        self.assertEqual(result["multi_criteria"][1]["value"], "Alice")
+        self.assertEqual(result["multi_criteria"][1]["column"], "Name")
+
+    def test_multi_column_et_dans(self):
+        result = IntentParserFR.parse("recherche 1001 dans Invoice et Alice dans Name")
+        self.assertIsNotNone(result)
+        self.assertIn("multi_criteria", result)
+        self.assertEqual(len(result["multi_criteria"]), 2)
+
+    def test_single_column_et_not_multi(self):
+        """'et' between values in same column should NOT trigger multi-column."""
+        result = IntentParserFR.parse("trouver 100 et 200 dans Montant")
+        self.assertIsNotNone(result)
+        self.assertNotIn("multi_criteria", result)
+        self.assertEqual(result["values"], [100, 200])
+        self.assertEqual(result["column_hint"], "Montant")
+
 
 # ============================================================================
 # French Chatbot tests
@@ -437,6 +471,33 @@ class TestExcelChatbotFR(unittest.TestCase):
     def test_welcome_is_french(self):
         self.assertIn("Bienvenue", ExcelChatbotFR.WELCOME)
         self.assertNotIn("Welcome", ExcelChatbotFR.WELCOME)
+
+    def test_multi_criteria_search(self):
+        bot = self._make_bot()
+        reply = bot.chat("recherche Alice dans Name avec Paris dans City", [])
+        self.assertIn("ligne", reply.lower())
+        self.assertEqual(len(bot.last_result_rows), 1)
+        self.assertEqual(bot.last_result_rows[0]["Name"], "Alice")
+        self.assertEqual(bot.last_result_rows[0]["City"], "Paris")
+
+    def test_multi_criteria_no_match(self):
+        bot = self._make_bot()
+        reply = bot.chat("recherche Alice dans Name avec London dans City", [])
+        self.assertIn("Aucun", reply)
+        self.assertEqual(len(bot.last_result_rows), 0)
+
+    def test_get_preview_data(self):
+        bot = self._make_bot()
+        headers, rows = bot.get_preview_data()
+        self.assertEqual(headers, ["Name", "Age", "City", "Invoice"])
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0][0], "Alice")
+
+    def test_get_preview_data_no_file(self):
+        bot = ExcelChatbotFR()
+        headers, rows = bot.get_preview_data()
+        self.assertEqual(headers, [])
+        self.assertEqual(rows, [])
 
 
 if __name__ == "__main__":

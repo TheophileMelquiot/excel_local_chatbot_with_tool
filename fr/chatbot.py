@@ -50,6 +50,8 @@ class IntentParser:
         "rechercher 12345 dans Numéro de Facture"
         "chercher 100 et 200 dans Montant"
         "chercher Alice ou Bob dans Nom"
+        "recherche 723 dans id avec dupont dans nom"
+        "recherche 723 dans id contenant la valeur dupont dans nom"
         "search 12345"
         "find John in Name"
     """
@@ -73,10 +75,87 @@ class IntentParser:
     # Séparateurs entre plusieurs valeurs
     _VALUE_SEP = re.compile(r"\s*(?:,|\bet\b|\bou\b|\band\b|\bor\b)\s*", re.IGNORECASE)
 
+    # Connecteurs entre critères multi-colonnes
+    _MULTI_COL_CONNECTORS = re.compile(
+        r"\s+(?:avec|contenant(?:\s+la\s+valeur)?|with|containing(?:\s+the\s+value)?)\s+",
+        re.IGNORECASE,
+    )
+
+    # Motif pour extraire une paire valeur/colonne dans un segment
+    _PAIR_RE = re.compile(
+        r"(?:la\s+valeur\s+)?(.+?)"
+        r"\s+(?:dans|dans\s+la\s+colonne|in)\s+(?:colonne\s+|column\s+)?(.+?)$",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _try_parse_value(cls, raw: str) -> Any:
+        """Essaie d'interpréter une chaîne comme un nombre, sinon retourne la chaîne."""
+        raw = raw.strip().strip("\"'")
+        try:
+            if "." in raw:
+                return float(raw)
+            return int(raw)
+        except ValueError:
+            return raw
+
+    @classmethod
+    def parse_multi_column(cls, message: str) -> Optional[Dict[str, Any]]:
+        """Tente d'analyser le message comme une requête multi-colonnes.
+
+        Gère les motifs tels que :
+            "recherche 723 dans id avec dupont dans nom"
+            "recherche 723 dans id contenant la valeur dupont dans nom"
+            "recherche 723 dans id et dupont dans nom"
+        """
+        m = re.match(rf"^\s*{cls._SEARCH_VERBS}\s+(.+)", message.strip(), re.IGNORECASE)
+        if not m:
+            return None
+
+        content = m.group(1).strip()
+
+        # Vérifier qu'il y a au moins 2 mots-clés "dans"/"in"
+        dans_matches = list(re.finditer(r"\b(?:dans|in)\b", content, re.IGNORECASE))
+        if len(dans_matches) < 2:
+            return None
+
+        # Essayer de séparer par les connecteurs explicites (avec, contenant…)
+        segments = cls._MULTI_COL_CONNECTORS.split(content)
+
+        # Si on n'a qu'un seul segment, essayer de séparer par "et"/"and"
+        if len(segments) == 1:
+            et_segments = re.split(r"\s+(?:et|and)\s+", content, flags=re.IGNORECASE)
+            if len(et_segments) >= 2:
+                # Ne séparer par "et" que si chaque partie contient "dans"/"in"
+                if all(re.search(r"\b(?:dans|in)\b", seg, re.IGNORECASE) for seg in et_segments):
+                    segments = et_segments
+
+        if len(segments) < 2:
+            return None
+
+        # Extraire les paires (valeur, colonne) de chaque segment
+        criteria: List[Dict[str, Any]] = []
+        for segment in segments:
+            pair_match = cls._PAIR_RE.match(segment.strip())
+            if pair_match:
+                value = cls._try_parse_value(pair_match.group(1))
+                column = pair_match.group(2).strip().strip("\"'")
+                criteria.append({"value": value, "column": column})
+
+        if len(criteria) < 2:
+            return None
+
+        return {"multi_criteria": criteria}
+
     @classmethod
     def parse(cls, message: str) -> Optional[Dict[str, Any]]:
-        """Retourne un dict ``{values, column_hint}`` ou *None* si le message
-        ne ressemble pas à une requête."""
+        """Retourne un dict ``{values, column_hint}`` ou ``{multi_criteria}``
+        ou *None* si le message ne ressemble pas à une requête."""
+        # Essayer d'abord la recherche multi-colonnes
+        multi = cls.parse_multi_column(message)
+        if multi is not None:
+            return multi
+
         m = cls._QUERY_RE.match(message.strip())
         if not m:
             return None
@@ -93,14 +172,7 @@ class IntentParser:
             p = p.strip().strip("\"'")
             if not p:
                 continue
-            # Essayer d'interpréter comme un nombre
-            try:
-                if "." in p:
-                    values.append(float(p))
-                else:
-                    values.append(int(p))
-            except ValueError:
-                values.append(p)
+            values.append(cls._try_parse_value(p))
 
         if not values:
             return None
@@ -136,6 +208,8 @@ class ExcelChatbot:
         "| Rechercher une valeur | `chercher 12345` |\n"
         "| Rechercher dans une colonne | `trouver Jean dans Nom` |\n"
         "| Rechercher plusieurs valeurs | `chercher 100, 200, 300 dans Montant` |\n"
+        "| Recherche multi-colonnes | `recherche 723 dans id avec dupont dans nom` |\n"
+        "| Recherche multi-colonnes | `recherche 723 dans id contenant la valeur dupont dans nom` |\n"
         "| Lister les colonnes | `colonnes` |\n"
         "| Afficher l'aide | `aide` |\n\n"
         "Vous pouvez aussi utiliser des verbes comme *rechercher*, *trouver*, *afficher*, *montrer*, *filtrer*."
@@ -167,6 +241,17 @@ class ExcelChatbot:
         for row in rows[:limit]:
             data.append([row.get(h, "") for h in headers])
         return data
+
+    def get_preview_data(self) -> Tuple[List[str], List[List[str]]]:
+        """Retourne les en-têtes et les 3 premières lignes pour l'aperçu."""
+        if self.engine is None:
+            return [], []
+        headers = self.engine.headers
+        rows = self.engine.rows[:3]
+        data = []
+        for row in rows:
+            data.append([row.get(h, "") for h in headers])
+        return headers, data
 
     # -------------------------------------------------------------- handlers
     def load_file(self, file) -> Tuple[str, str]:
@@ -209,9 +294,14 @@ class ExcelChatbot:
             return (
                 "🤔 Je n'ai pas compris cette requête. Essayez quelque chose comme :\n"
                 "- `chercher 12345`\n"
-                "- `trouver Jean dans Nom`\n\n"
+                "- `trouver Jean dans Nom`\n"
+                "- `recherche 723 dans id avec dupont dans nom`\n\n"
                 "Tapez **aide** pour la liste complète des commandes."
             )
+
+        # --- recherche multi-colonnes -----------------------------------------
+        if "multi_criteria" in parsed:
+            return self._search_multi_criteria(parsed["multi_criteria"])
 
         values = parsed["values"]
         column_hint = parsed["column_hint"]
@@ -281,6 +371,30 @@ class ExcelChatbot:
             f"dans la colonne **{column_hint}**.\n\n{preview}"
         )
 
+    def _search_multi_criteria(self, criteria_list: List[Dict[str, Any]]) -> str:
+        """Recherche multi-colonnes avec logique ET."""
+        criteria = [(item["value"], item["column"]) for item in criteria_list]
+        try:
+            result = self.engine.search(
+                criteria=criteria,
+                mode=LogicalOperator.AND,
+                include_partial=True,
+            )
+        except ValueError as exc:
+            return f"❌ {exc}"
+
+        self.last_result_rows = result.matched_rows
+        desc = " ET ".join(
+            f"**{c['value']}** dans **{c['column']}**" for c in criteria_list
+        )
+        if not result.matched_rows:
+            return f"Aucun résultat trouvé pour {desc}."
+
+        preview = self._format_rows_preview(result.matched_rows)
+        return (
+            f"🔍 **{result.total_matches}** ligne(s) trouvée(s) pour {desc}.\n\n{preview}"
+        )
+
     def _format_rows_preview(self, rows: List[Dict[str, str]], limit: int = 10) -> str:
         """Retourne un aperçu en tableau markdown des lignes correspondantes."""
         if not rows:
@@ -339,8 +453,13 @@ def build_ui() -> gr.Blocks:
                 load_status = gr.Markdown("")
                 column_info = gr.Markdown("")
 
-            # ---- Panneau droit : chat + sauvegarde ----
+            # ---- Panneau droit : aperçu + chat + sauvegarde ----
             with gr.Column(scale=2):
+                data_preview = gr.Dataframe(
+                    label="Aperçu des données",
+                    visible=False,
+                    interactive=False,
+                )
                 chatbot_ui = gr.Chatbot(
                     value=[{"role": "assistant", "content": ExcelChatbot.WELCOME}],
                     label="Discussion",
@@ -361,7 +480,13 @@ def build_ui() -> gr.Blocks:
             status, cols = bot.load_file(file)
             # Réinitialiser le chat
             welcome = [{"role": "assistant", "content": status}]
-            return status, cols, welcome
+            # Préparer l'aperçu des données
+            headers, rows = bot.get_preview_data()
+            if headers and rows:
+                import pandas as pd
+                df = pd.DataFrame(rows, columns=headers)
+                return status, cols, welcome, gr.update(visible=True, value=df)
+            return status, cols, welcome, gr.update(visible=False, value=None)
 
         def on_send(message, history):
             if not message.strip():
@@ -380,7 +505,7 @@ def build_ui() -> gr.Blocks:
         file_input.change(
             fn=on_file_upload,
             inputs=[file_input],
-            outputs=[load_status, column_info, chatbot_ui],
+            outputs=[load_status, column_info, chatbot_ui, data_preview],
         )
         msg_input.submit(fn=on_send, inputs=[msg_input, chatbot_ui], outputs=[msg_input, chatbot_ui])
         send_btn.click(fn=on_send, inputs=[msg_input, chatbot_ui], outputs=[msg_input, chatbot_ui])
