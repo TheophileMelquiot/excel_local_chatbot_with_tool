@@ -1,8 +1,9 @@
 """
-Tests for the Excel Query Chatbot and Intent Parser.
+Tests for the Excel Query Chatbot and Intent Parser (English and French).
 """
 
 import os
+import sys
 import tempfile
 import unittest
 
@@ -18,6 +19,10 @@ from excel_query_engine import (
     LogicalOperator,
     SearchEngine,
 )
+
+# Import French versions with aliases
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "fr"))
+from fr.chatbot import ExcelChatbot as ExcelChatbotFR, IntentParser as IntentParserFR
 
 
 # ============================================================================
@@ -297,6 +302,141 @@ class TestSearchEngine(unittest.TestCase):
     def test_partial_match(self):
         self.assertTrue(SearchEngine.partial_match("Ali", "Alice", DataType.TEXT))
         self.assertFalse(SearchEngine.partial_match("Alice", "Alice", DataType.TEXT))
+
+
+# ============================================================================
+# French Intent Parser tests
+# ============================================================================
+
+class TestIntentParserFR(unittest.TestCase):
+    """Unit tests for the French IntentParser."""
+
+    def test_simple_search_french(self):
+        result = IntentParserFR.parse("chercher Alice")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["values"], "Alice")
+        self.assertIsNone(result["column_hint"])
+
+    def test_search_with_column_french(self):
+        result = IntentParserFR.parse("trouver Alice dans Nom")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["values"], "Alice")
+        self.assertEqual(result["column_hint"], "Nom")
+
+    def test_rechercher_verb(self):
+        result = IntentParserFR.parse("rechercher 12345")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["values"], 12345)
+
+    def test_search_multiple_values_french(self):
+        result = IntentParserFR.parse("chercher Alice, Bob dans Nom")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["values"], ["Alice", "Bob"])
+        self.assertEqual(result["column_hint"], "Nom")
+
+    def test_search_with_et(self):
+        result = IntentParserFR.parse("trouver 100 et 200 dans Montant")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["values"], [100, 200])
+        self.assertEqual(result["column_hint"], "Montant")
+
+    def test_search_with_ou(self):
+        result = IntentParserFR.parse("chercher Alice ou Bob dans Nom")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["values"], ["Alice", "Bob"])
+
+    def test_various_french_verbs(self):
+        for verb in ["chercher", "rechercher", "trouver", "afficher", "montrer", "filtrer"]:
+            result = IntentParserFR.parse(f"{verb} test")
+            self.assertIsNotNone(result, f"French verb '{verb}' was not recognized")
+
+    def test_english_verbs_still_work(self):
+        for verb in ["search", "find", "look for", "query", "get", "show", "filter"]:
+            result = IntentParserFR.parse(f"{verb} test")
+            self.assertIsNotNone(result, f"English verb '{verb}' should still work in French version")
+
+    def test_non_query_message_french(self):
+        self.assertIsNone(IntentParserFR.parse("bonjour"))
+        self.assertIsNone(IntentParserFR.parse("quel temps fait-il ?"))
+        self.assertIsNone(IntentParserFR.parse(""))
+
+
+# ============================================================================
+# French Chatbot tests
+# ============================================================================
+
+class TestExcelChatbotFR(unittest.TestCase):
+    """Integration tests for the French ExcelChatbot."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = tempfile.mkdtemp()
+        cls.test_file = os.path.join(cls.tmpdir, "test_data.xlsx")
+        _create_test_excel(cls.test_file)
+
+    def _make_bot(self):
+        bot = ExcelChatbotFR()
+
+        class FakeFile:
+            def __init__(self, path):
+                self.name = path
+
+        bot.load_file(FakeFile(self.test_file))
+        return bot
+
+    def test_help_command_french(self):
+        bot = self._make_bot()
+        reply = bot.chat("aide", [])
+        self.assertIn("Commandes disponibles", reply)
+
+    def test_help_command_english_fallback(self):
+        bot = self._make_bot()
+        reply = bot.chat("help", [])
+        self.assertIn("Commandes disponibles", reply)
+
+    def test_columns_command_french(self):
+        bot = self._make_bot()
+        reply = bot.chat("colonnes", [])
+        self.assertIn("Name", reply)
+        self.assertIn("Age", reply)
+
+    def test_search_query_french(self):
+        bot = self._make_bot()
+        reply = bot.chat("chercher Alice dans Name", [])
+        self.assertIn("2", reply)
+        self.assertEqual(len(bot.last_result_rows), 2)
+
+    def test_search_all_columns_french(self):
+        bot = self._make_bot()
+        reply = bot.chat("chercher Paris", [])
+        self.assertIn("ligne", reply.lower())
+        self.assertGreaterEqual(len(bot.last_result_rows), 2)
+
+    def test_unknown_message_french(self):
+        bot = self._make_bot()
+        reply = bot.chat("bonjour le monde", [])
+        self.assertIn("pas compris", reply)
+
+    def test_no_file_loaded_french(self):
+        bot = ExcelChatbotFR()
+        reply = bot.chat("chercher Alice", [])
+        self.assertIn("téléverser", reply.lower())
+
+    def test_save_results_french(self):
+        bot = self._make_bot()
+        bot.chat("chercher Alice dans Name", [])
+        path = bot.save_results()
+        self.assertIsNotNone(path)
+        self.assertTrue(os.path.exists(path))
+
+    def test_save_no_results_french(self):
+        bot = self._make_bot()
+        path = bot.save_results()
+        self.assertIsNone(path)
+
+    def test_welcome_is_french(self):
+        self.assertIn("Bienvenue", ExcelChatbotFR.WELCOME)
+        self.assertNotIn("Welcome", ExcelChatbotFR.WELCOME)
 
 
 if __name__ == "__main__":
