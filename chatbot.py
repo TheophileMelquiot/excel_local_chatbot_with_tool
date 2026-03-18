@@ -4,6 +4,10 @@ Excel Chatbot — Offline chatbot interface for the Excel Query Engine.
 Uses Gradio for the UI and a rule-based intent parser so the application
 works entirely offline without any internet connection or external LLM API.
 
+Constants:
+    MAX_PREVIEW_COLUMNS  – max columns shown in a chat preview table
+    MAX_CELL_DISPLAY_LEN – max characters per cell in a chat preview table
+
 Usage:
     python chatbot.py                       # default port 7860
     python chatbot.py --port 8080           # custom port
@@ -27,6 +31,9 @@ from excel_query_engine import (
     LogicalOperator,
 )
 
+MAX_PREVIEW_COLUMNS = 8
+MAX_CELL_DISPLAY_LEN = 30
+
 
 # ============================================================================
 # INTENT PARSER — rule-based, fully offline
@@ -35,7 +42,7 @@ from excel_query_engine import (
 class IntentParser:
     """Parse natural-language chat messages into structured query parameters.
 
-    Designed to work without any ML model so the chatbot runs 100 % offline.
+    Designed to work without any ML model so the chatbot runs 100% offline.
     Handles common patterns such as:
         "search 12345"
         "find John in column Name"
@@ -273,16 +280,15 @@ class ExcelChatbot:
             return ""
         headers = list(rows[0].keys())
         # Truncate column display if too many columns
-        max_cols = 8
-        display_headers = headers[:max_cols]
-        truncated = len(headers) > max_cols
+        display_headers = headers[:MAX_PREVIEW_COLUMNS]
+        truncated = len(headers) > MAX_PREVIEW_COLUMNS
 
         lines = [
             "| " + " | ".join(display_headers) + (" | ..." if truncated else "") + " |",
             "| " + " | ".join(["---"] * len(display_headers)) + (" | ---" if truncated else "") + " |",
         ]
         for row in rows[:limit]:
-            cells = [str(row.get(h, ""))[:30] for h in display_headers]
+            cells = [str(row.get(h, ""))[:MAX_CELL_DISPLAY_LEN] for h in display_headers]
             lines.append("| " + " | ".join(cells) + (" | ..." if truncated else "") + " |")
 
         if len(rows) > limit:
@@ -317,7 +323,7 @@ def build_ui() -> gr.Blocks:
     bot = ExcelChatbot()
 
     with gr.Blocks(title="Excel Query Chatbot") as app:
-        gr.Markdown("# 📊 Excel Query Chatbot\nAsk questions about your Excel data — **100 % offline**.")
+        gr.Markdown("# 📊 Excel Query Chatbot\nAsk questions about your Excel data — **100% offline**.")
 
         with gr.Row():
             # ---- Left panel: file upload + column info ----

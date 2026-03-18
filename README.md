@@ -1,6 +1,6 @@
 # AI_chatbot_local_with_tool_to_manipulate_excel
 
-A simple, **100 % offline** chatbot that lets non-technical users search Excel files through a natural-language chat interface — no internet connection required.
+A simple, **100% offline** chatbot that lets non-technical users search Excel files through a natural-language chat interface — no internet connection required.
 
 ![Chatbot UI](https://github.com/user-attachments/assets/04fd115e-5b97-4679-9744-b489f46dc7e4)
 
