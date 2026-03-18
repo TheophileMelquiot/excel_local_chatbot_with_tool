@@ -23,6 +23,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import gradio as gr
+import pandas as pd
 
 from excel_query_engine import (
     ColumnProfile,
@@ -88,6 +89,9 @@ class IntentParser:
         re.IGNORECASE,
     )
 
+    # Motif pour détecter un mot-clé "dans"/"in" (utilisé pour le comptage)
+    _DANS_IN_RE = re.compile(r"\b(?:dans|in)\b", re.IGNORECASE)
+
     @classmethod
     def _try_parse_value(cls, raw: str) -> Any:
         """Essaie d'interpréter une chaîne comme un nombre, sinon retourne la chaîne."""
@@ -115,7 +119,7 @@ class IntentParser:
         content = m.group(1).strip()
 
         # Vérifier qu'il y a au moins 2 mots-clés "dans"/"in"
-        dans_matches = list(re.finditer(r"\b(?:dans|in)\b", content, re.IGNORECASE))
+        dans_matches = list(cls._DANS_IN_RE.finditer(content))
         if len(dans_matches) < 2:
             return None
 
@@ -127,7 +131,7 @@ class IntentParser:
             et_segments = re.split(r"\s+(?:et|and)\s+", content, flags=re.IGNORECASE)
             if len(et_segments) >= 2:
                 # Ne séparer par "et" que si chaque partie contient "dans"/"in"
-                if all(re.search(r"\b(?:dans|in)\b", seg, re.IGNORECASE) for seg in et_segments):
+                if all(cls._DANS_IN_RE.search(seg) for seg in et_segments):
                     segments = et_segments
 
         if len(segments) < 2:
@@ -483,7 +487,6 @@ def build_ui() -> gr.Blocks:
             # Préparer l'aperçu des données
             headers, rows = bot.get_preview_data()
             if headers and rows:
-                import pandas as pd
                 df = pd.DataFrame(rows, columns=headers)
                 return status, cols, welcome, gr.update(visible=True, value=df)
             return status, cols, welcome, gr.update(visible=False, value=None)
