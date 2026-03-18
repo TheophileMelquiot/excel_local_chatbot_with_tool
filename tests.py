@@ -3,7 +3,6 @@ Tests for the Excel Query Chatbot and Intent Parser (English and French).
 """
 
 import os
-import sys
 import tempfile
 import unittest
 
@@ -21,7 +20,6 @@ from excel_query_engine import (
 )
 
 # Import French versions with aliases
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "fr"))
 from fr.chatbot import ExcelChatbot as ExcelChatbotFR, IntentParser as IntentParserFR
 
 
