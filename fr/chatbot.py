@@ -32,6 +32,7 @@ from excel_query_engine import (
     ExcelQueryEngine,
     LogicalOperator,
 )
+from llm_parser import OllamaIntentParser  # ← AJOUT
 
 MAX_PREVIEW_COLUMNS = 8
 MAX_CELL_DISPLAY_LEN = 30
@@ -105,13 +106,7 @@ class IntentParser:
 
     @classmethod
     def parse_multi_column(cls, message: str) -> Optional[Dict[str, Any]]:
-        """Tente d'analyser le message comme une requête multi-colonnes.
-
-        Gère les motifs tels que :
-            "recherche 723 dans id avec dupont dans nom"
-            "recherche 723 dans id contenant la valeur dupont dans nom"
-            "recherche 723 dans id et dupont dans nom"
-        """
+        """Tente d'analyser le message comme une requête multi-colonnes."""
         m = re.match(rf"^\s*{cls._SEARCH_VERBS}\s+(.+)", message.strip(), re.IGNORECASE)
         if not m:
             return None
@@ -130,7 +125,6 @@ class IntentParser:
         if len(segments) == 1:
             et_segments = re.split(r"\s+(?:et|and)\s+", content, flags=re.IGNORECASE)
             if len(et_segments) >= 2:
-                # Ne séparer par "et" que si chaque partie contient "dans"/"in"
                 if all(cls._DANS_IN_RE.search(seg) for seg in et_segments):
                     segments = et_segments
 
@@ -153,9 +147,7 @@ class IntentParser:
 
     @classmethod
     def parse(cls, message: str) -> Optional[Dict[str, Any]]:
-        """Retourne un dict ``{values, column_hint}`` ou ``{multi_criteria}``
-        ou *None* si le message ne ressemble pas à une requête."""
-        # Essayer d'abord la recherche multi-colonnes
+        """Retourne un dict ou None si le message ne ressemble pas à une requête."""
         multi = cls.parse_multi_column(message)
         if multi is not None:
             return multi
@@ -169,7 +161,6 @@ class IntentParser:
         if column_hint:
             column_hint = column_hint.strip().strip("\"'")
 
-        # Séparer sur les virgules / "et" / "ou"
         parts = cls._VALUE_SEP.split(raw_values)
         values: List[Any] = []
         for p in parts:
@@ -223,6 +214,14 @@ class ExcelChatbot:
         self.engine: Optional[ExcelQueryEngine] = None
         self.last_result = None
         self.last_result_rows: List[Dict[str, str]] = []
+
+        # ── AJOUT : initialisation du parser LLM ─────────────────────────────
+        self.llm_parser = OllamaIntentParser()
+        if self.llm_parser.is_available():
+            print("🤖 LLM local détecté — mode LLM activé")
+        else:
+            print("⚠️  LLM non disponible — mode regex uniquement")
+        # ─────────────────────────────────────────────────────────────────────
 
     # ------------------------------------------------------------------ utils
     def _format_column_info(self) -> str:
@@ -293,7 +292,16 @@ class ExcelChatbot:
         if self.engine is None:
             return "⚠️ Veuillez d'abord téléverser un fichier Excel (utilisez le panneau de gauche)."
 
-        parsed = IntentParser.parse(msg)
+        # ── MODIFIÉ : LLM en priorité, regex en fallback ──────────────────────
+        parsed = None
+
+        if self.llm_parser.is_available():
+            parsed = self.llm_parser.parse(msg)
+
+        if parsed is None:          # LLM indisponible, timeout, ou JSON invalide
+            parsed = IntentParser.parse(msg)
+        # ─────────────────────────────────────────────────────────────────────
+
         if parsed is None:
             return (
                 "🤔 Je n'ai pas compris cette requête. Essayez quelque chose comme :\n"
@@ -333,7 +341,6 @@ class ExcelChatbot:
                     include_partial=True,
                 )
                 if result.matched_rows:
-                    # Dédupliquer
                     existing = {tuple(r.items()) for r in all_matches}
                     for row in result.matched_rows:
                         if tuple(row.items()) not in existing:
@@ -404,7 +411,6 @@ class ExcelChatbot:
         if not rows:
             return ""
         headers = list(rows[0].keys())
-        # Tronquer l'affichage si trop de colonnes
         display_headers = headers[:MAX_PREVIEW_COLUMNS]
         truncated = len(headers) > MAX_PREVIEW_COLUMNS
 
@@ -417,7 +423,10 @@ class ExcelChatbot:
             lines.append("| " + " | ".join(cells) + (" | ..." if truncated else "") + " |")
 
         if len(rows) > limit:
-            lines.append(f"\n*… et {len(rows) - limit} lignes supplémentaires. Cliquez sur **Sauvegarder les résultats en Excel** pour obtenir toutes les lignes.*")
+            lines.append(
+                f"\n*… et {len(rows) - limit} lignes supplémentaires. "
+                f"Cliquez sur **Sauvegarder les résultats en Excel** pour obtenir toutes les lignes.*"
+            )
 
         return "\n".join(lines)
 
@@ -448,12 +457,18 @@ def build_ui() -> gr.Blocks:
     bot = ExcelChatbot()
 
     with gr.Blocks(title="Chatbot de requêtes Excel") as app:
-        gr.Markdown("# 📊 Chatbot de requêtes Excel\nPosez des questions sur vos données Excel — **100% hors-ligne**.")
+        gr.Markdown(
+            "# 📊 Chatbot de requêtes Excel\n"
+            "Posez des questions sur vos données Excel — **100% hors-ligne**."
+        )
 
         with gr.Row():
             # ---- Panneau gauche : téléversement + info colonnes ----
             with gr.Column(scale=1):
-                file_input = gr.File(label="Téléverser un fichier Excel (.xlsx)", file_types=[".xlsx", ".xls"])
+                file_input = gr.File(
+                    label="Téléverser un fichier Excel (.xlsx)",
+                    file_types=[".xlsx", ".xls"],
+                )
                 load_status = gr.Markdown("")
                 column_info = gr.Markdown("")
 
@@ -482,9 +497,7 @@ def build_ui() -> gr.Blocks:
         # ---- Callbacks -------------------------------------------------------
         def on_file_upload(file):
             status, cols = bot.load_file(file)
-            # Réinitialiser le chat
             welcome = [{"role": "assistant", "content": status}]
-            # Préparer l'aperçu des données
             headers, rows = bot.get_preview_data()
             if headers and rows:
                 df = pd.DataFrame(rows, columns=headers)
@@ -510,8 +523,16 @@ def build_ui() -> gr.Blocks:
             inputs=[file_input],
             outputs=[load_status, column_info, chatbot_ui, data_preview],
         )
-        msg_input.submit(fn=on_send, inputs=[msg_input, chatbot_ui], outputs=[msg_input, chatbot_ui])
-        send_btn.click(fn=on_send, inputs=[msg_input, chatbot_ui], outputs=[msg_input, chatbot_ui])
+        msg_input.submit(
+            fn=on_send,
+            inputs=[msg_input, chatbot_ui],
+            outputs=[msg_input, chatbot_ui],
+        )
+        send_btn.click(
+            fn=on_send,
+            inputs=[msg_input, chatbot_ui],
+            outputs=[msg_input, chatbot_ui],
+        )
         save_btn.click(fn=on_save, outputs=[save_output])
 
     return app
