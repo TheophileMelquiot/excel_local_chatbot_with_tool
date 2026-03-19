@@ -9,12 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime
 import string
-
-try:
-    from excel_ai import detect_headers_upgrade
-    EXCEL_AI_AVAILABLE = True
-except ImportError:
-    EXCEL_AI_AVAILABLE = False
+from excel_ai import detect_headers_upgrade
 
 try:
     from openpyxl import load_workbook, Workbook
@@ -697,60 +692,51 @@ class ExcelReader:
             raise ValueError("Excel file is empty")
         
         # Extract headers
-        header_row_idx = 0
+        # Detect headers using upgraded model
+        header_info = detect_headers_upgrade(filepath)
 
-        if EXCEL_AI_AVAILABLE:
-            # Detect headers using upgraded model
-            header_info = detect_headers_upgrade(filepath)
+        sheet_name = list(header_info.keys())[0]
+        info = header_info[sheet_name]
 
-            sheet_name = list(header_info.keys())[0]
-            info = header_info[sheet_name]
+        header_rows = info["header_rows"]
+        confidence = info["confidence"]
+        reconstructed_columns = info["columns"]
 
-            header_rows = info["header_rows"]
-            confidence = info["confidence"]
-            reconstructed_columns = info["columns"]
+        print(f"🧠 Header rows detected: {header_rows} (confidence={confidence:.2f})")
 
-            print(f"🧠 Header rows detected: {header_rows} (confidence={confidence:.2f})")
+        # Convert to 0-based index
+        header_row_idx = header_rows[-1] - 1
 
-            # Convert to 0-based index
-            header_row_idx = header_rows[-1] - 1
 
-            # ----------------------------------------
-            # CASE 1: reconstructed header exists
-            # ----------------------------------------
-            if reconstructed_columns is not None:
-                headers = [
-                    DataNormalizer.normalize_cell(h)
-                    for h in reconstructed_columns
-                ]
+        # ----------------------------------------
+        # CASE 1: reconstructed header exists
+        # ----------------------------------------
+        if reconstructed_columns is not None:
+            headers = [
+                DataNormalizer.normalize_cell(h)
+                for h in reconstructed_columns
+            ]
 
-            # ----------------------------------------
-            # CASE 2: fallback to detected row
-            # ----------------------------------------
-            else:
-                headers = [
-                    DataNormalizer.normalize_cell(h)
-                    for h in all_rows[header_row_idx]
-                ]
-
-            # ----------------------------------------
-            # SAFETY: low confidence fallback
-            # ----------------------------------------
-            if confidence < 0.5:
-                print("⚠️ Low confidence → fallback to row 1")
-                header_row_idx = 0
-                headers = [
-                    DataNormalizer.normalize_cell(h)
-                    for h in all_rows[0]
-                ]
+        # ----------------------------------------
+        # CASE 2: fallback to detected row
+        # ----------------------------------------
         else:
-            # Fallback: use first row as headers
-            print("ℹ️ excel_ai not available — using first row as headers")
+            headers = [
+                DataNormalizer.normalize_cell(h)
+                for h in all_rows[header_row_idx]
+            ]
+
+
+        # ----------------------------------------
+        # SAFETY: low confidence fallback
+        # ----------------------------------------
+        if confidence < 0.5:
+            print("⚠️ Low confidence → fallback to row 1")
             header_row_idx = 0
             headers = [
                 DataNormalizer.normalize_cell(h)
                 for h in all_rows[0]
-            ]
+    ]
         
         # Normalize data rows and convert to dicts
         normalized_rows = []
