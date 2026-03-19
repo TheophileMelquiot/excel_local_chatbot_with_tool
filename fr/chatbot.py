@@ -32,7 +32,7 @@ from excel_query_engine import (
     ExcelQueryEngine,
     LogicalOperator,
 )
-from llm_parser import OllamaIntentParser  # ← AJOUT
+from llm_parser import OllamaIntentParser, is_llm_ready, start_llm_preload  # ← AJOUT
 
 MAX_PREVIEW_COLUMNS = 8
 MAX_CELL_DISPLAY_LEN = 30
@@ -62,7 +62,8 @@ class IntentParser:
     _SEARCH_VERBS = (
         r"(?:chercher|cherche|rechercher|recherche|trouver|trouve|"
         r"afficher|affiche|montrer|montre|filtrer|filtre|"
-        r"search|find|look\s*(?:for|up)?|query|get|show|where|filter)"
+        r"lister|liste|donner|donne(?:-moi)?|obtenir|obtiens|"
+        r"search|find|look\s*(?:for|up)?|query|get|show|where|filter|list|give(?:\s*me)?)"
     )
 
     # Motif : <verbe> <valeurs> [dans [la colonne] <indice_colonne>]
@@ -94,6 +95,13 @@ class IntentParser:
     _DANS_IN_RE = re.compile(r"\b(?:dans|in)\b", re.IGNORECASE)
 
     @classmethod
+    def _preprocess(cls, message: str) -> str:
+        """Nettoie le message avant parsing : ponctuation finale, espaces multiples."""
+        msg = message.strip().rstrip(".?!")
+        msg = re.sub(r"\s{2,}", " ", msg)
+        return msg
+
+    @classmethod
     def _try_parse_value(cls, raw: str) -> Any:
         """Essaie d'interpréter une chaîne comme un nombre, sinon retourne la chaîne."""
         raw = raw.strip().strip("\"'")
@@ -107,6 +115,12 @@ class IntentParser:
     @classmethod
     def parse_multi_column(cls, message: str) -> Optional[Dict[str, Any]]:
         """Tente d'analyser le message comme une requête multi-colonnes."""
+        message = cls._preprocess(message)
+        return cls._parse_multi_column_inner(message)
+
+    @classmethod
+    def _parse_multi_column_inner(cls, message: str) -> Optional[Dict[str, Any]]:
+        """Logique interne de parse_multi_column sur un message déjà prétraité."""
         m = re.match(rf"^\s*{cls._SEARCH_VERBS}\s+(.+)", message.strip(), re.IGNORECASE)
         if not m:
             return None
@@ -148,7 +162,8 @@ class IntentParser:
     @classmethod
     def parse(cls, message: str) -> Optional[Dict[str, Any]]:
         """Retourne un dict ou None si le message ne ressemble pas à une requête."""
-        multi = cls.parse_multi_column(message)
+        message = cls._preprocess(message)
+        multi = cls._parse_multi_column_inner(message)  # message déjà prétraité
         if multi is not None:
             return multi
 
@@ -218,7 +233,8 @@ class ExcelChatbot:
         # ── AJOUT : initialisation du parser LLM ─────────────────────────────
         self.llm_parser = OllamaIntentParser()
         if self.llm_parser.is_available():
-            print("🤖 LLM local détecté — mode LLM activé")
+            print("🤖 LLM local détecté — préchargement en arrière-plan lancé")
+            start_llm_preload()  # non-bloquant
         else:
             print("⚠️  LLM non disponible — mode regex uniquement")
         # ─────────────────────────────────────────────────────────────────────
@@ -294,6 +310,10 @@ class ExcelChatbot:
 
         # ── MODIFIÉ : LLM en priorité, regex en fallback ──────────────────────
         parsed = None
+        llm_status_note = ""
+
+        if self.llm_parser.is_available() and not is_llm_ready():
+            llm_status_note = "\n\n> ⏳ *LLM encore en chargement, analyse regex utilisée pour cette requête.*"
 
         if self.llm_parser.is_available():
             parsed = self.llm_parser.parse(msg)
@@ -309,21 +329,22 @@ class ExcelChatbot:
                 "- `trouver Jean dans Nom`\n"
                 "- `recherche 723 dans id avec dupont dans nom`\n\n"
                 "Tapez **aide** pour la liste complète des commandes."
+                + llm_status_note
             )
 
         # --- recherche multi-colonnes -----------------------------------------
         if "multi_criteria" in parsed:
-            return self._search_multi_criteria(parsed["multi_criteria"])
+            return self._search_multi_criteria(parsed["multi_criteria"]) + llm_status_note
 
         values = parsed["values"]
         column_hint = parsed["column_hint"]
 
         # Si pas d'indice de colonne, chercher dans toutes les colonnes
         if column_hint is None:
-            return self._search_all_columns(values)
+            return self._search_all_columns(values) + llm_status_note
 
         # Chercher dans la colonne spécifiée
-        return self._search_specific_column(values, column_hint)
+        return self._search_specific_column(values, column_hint) + llm_status_note
 
     def _search_all_columns(self, values: Any) -> str:
         """Cherche *values* dans toutes les colonnes et retourne les résultats combinés."""
@@ -456,11 +477,19 @@ def build_ui() -> gr.Blocks:
     """Construit et retourne l'application Gradio Blocks."""
     bot = ExcelChatbot()
 
+    def _get_llm_status_text() -> str:
+        if not bot.llm_parser.is_available():
+            return "🔴 LLM non disponible (regex uniquement)"
+        if is_llm_ready():
+            return "🟢 LLM prêt"
+        return "🟡 LLM en cours de chargement…"
+
     with gr.Blocks(title="Chatbot de requêtes Excel") as app:
         gr.Markdown(
             "# 📊 Chatbot de requêtes Excel\n"
             "Posez des questions sur vos données Excel — **100% hors-ligne**."
         )
+        llm_status_md = gr.Markdown(value=_get_llm_status_text(), label="État LLM")
 
         with gr.Row():
             # ---- Panneau gauche : téléversement + info colonnes ----
@@ -492,6 +521,7 @@ def build_ui() -> gr.Blocks:
                 with gr.Row():
                     send_btn = gr.Button("Envoyer", variant="primary")
                     save_btn = gr.Button("💾 Sauvegarder les résultats en Excel")
+                    refresh_llm_btn = gr.Button("🔄 Vérifier état LLM")
                 save_output = gr.File(label="Télécharger les résultats", visible=False)
 
         # ---- Callbacks -------------------------------------------------------
@@ -534,6 +564,7 @@ def build_ui() -> gr.Blocks:
             outputs=[msg_input, chatbot_ui],
         )
         save_btn.click(fn=on_save, outputs=[save_output])
+        refresh_llm_btn.click(fn=_get_llm_status_text, outputs=[llm_status_md])
 
     return app
 
