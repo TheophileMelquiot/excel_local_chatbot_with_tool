@@ -4,7 +4,8 @@ Production-ready implementation for 10,000+ row Excel files
 """
 
 import re
-from typing import List, Dict, Tuple, Any, Optional, Union
+from collections import OrderedDict
+from typing import List, Dict, Set, Tuple, Any, Optional, Union
 from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime
@@ -591,32 +592,39 @@ class QueryBuilder:
     
     @staticmethod
     def _apply_and_logic(results: List[SearchResult], include_partial: bool) -> List[Dict[str, str]]:
-        """AND mode: return rows matching ALL criteria"""
+        """AND mode: return rows matching ALL criteria, preserving original row order."""
         if not results:
             return []
-        
-        # Start with rows from first criterion
+
+        # Build ordered mapping (tuple key → original row dict) from first criterion,
+        # preserving insertion order so that row sequence matches the source file.
         first_result = results[0]
-        candidate_rows = set()
+        candidate_rows: OrderedDict[tuple, Dict[str, str]] = OrderedDict()
         for row in first_result.exact_matches:
-            candidate_rows.add(tuple(row.items()))
+            key = tuple(row.items())
+            if key not in candidate_rows:
+                candidate_rows[key] = row
         if include_partial:
             for row in first_result.partial_matches:
-                candidate_rows.add(tuple(row.items()))
-        
-        # Intersect with subsequent criteria
+                key = tuple(row.items())
+                if key not in candidate_rows:
+                    candidate_rows[key] = row
+
+        # Intersect with subsequent criteria while preserving order
         for result in results[1:]:
-            criterion_rows = set()
+            criterion_keys: Set[tuple] = set()
             for row in result.exact_matches:
-                criterion_rows.add(tuple(row.items()))
+                criterion_keys.add(tuple(row.items()))
             if include_partial:
                 for row in result.partial_matches:
-                    criterion_rows.add(tuple(row.items()))
-            
-            candidate_rows = candidate_rows.intersection(criterion_rows)
-        
-        # Convert back to dicts
-        return [dict(row) for row in candidate_rows]
+                    criterion_keys.add(tuple(row.items()))
+
+            # Keep only rows present in this criterion
+            candidate_rows = OrderedDict(
+                (k, v) for k, v in candidate_rows.items() if k in criterion_keys
+            )
+
+        return list(candidate_rows.values())
     
     @staticmethod
     def _apply_or_logic(results: List[SearchResult], include_partial: bool) -> List[Dict[str, str]]:
@@ -669,12 +677,37 @@ class QueryBuilder:
 
 class ExcelReader:
     """Read and normalize Excel files"""
-    
+
+    @staticmethod
+    def _make_headers_unique(headers: List[str]) -> List[str]:
+        """
+        Ensure every header name is unique.
+
+        When the header-detection model returns duplicate column names (e.g.
+        four columns all called "tous clients tous clients"), building row dicts
+        directly would cause all duplicate keys to collapse to the last value.
+        This method appends a numeric counter to each repeated name so that
+        every column retains its own unique key.
+
+        First occurrence keeps the original name; subsequent occurrences get
+        a space-separated counter: "name", "name 2", "name 3", …
+        """
+        seen: Dict[str, int] = {}
+        unique: List[str] = []
+        for h in headers:
+            if h not in seen:
+                seen[h] = 1
+                unique.append(h)
+            else:
+                seen[h] += 1
+                unique.append(f"{h} {seen[h]}")
+        return unique
+
     @staticmethod
     def read_file(filepath: str) -> Tuple[List[str], List[List[str]]]:
         """
         Read Excel file and return normalized data
-        
+
         Returns: (headers, rows)
         """
         if not OPENPYXL_AVAILABLE:
@@ -736,12 +769,19 @@ class ExcelReader:
             headers = [
                 DataNormalizer.normalize_cell(h)
                 for h in all_rows[0]
-    ]
-        
-        # Normalize data rows and convert to dicts
+            ]
+
+        # Deduplicate header names so that columns with identical labels
+        # (e.g. merged cells that expand to the same string) each receive
+        # a unique dict key.  This prevents later value-overwriting and
+        # ensures the exported file has one column per original Excel column.
+        headers = ExcelReader._make_headers_unique(headers)
+
+        # Normalize data rows using OrderedDict to guarantee that the
+        # column order in every row dict matches the `headers` list exactly.
         normalized_rows = []
         for row_data in all_rows[header_row_idx + 1:]:
-            normalized_row = {}
+            normalized_row: Dict[str, str] = OrderedDict()
             for col_idx, header in enumerate(headers):
                 if col_idx < len(row_data):
                     normalized_row[header] = DataNormalizer.normalize_cell(row_data[col_idx])
