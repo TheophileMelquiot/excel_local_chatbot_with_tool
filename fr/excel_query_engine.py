@@ -788,7 +788,19 @@ class ExcelReader:
                 else:
                     normalized_row[header] = ""
             normalized_rows.append(normalized_row)
-        
+
+        # ----------------------------------------
+        # Remove placeholder columns (_col_X) used
+        # only for alignment — they are empty and
+        # not useful to the end user.
+        # ----------------------------------------
+        placeholder_cols = [h for h in headers if h.startswith("_col_")]
+        if placeholder_cols:
+            headers = [h for h in headers if not h.startswith("_col_")]
+            for row in normalized_rows:
+                for col in placeholder_cols:
+                    row.pop(col, None)
+
         return headers, normalized_rows
 
 
