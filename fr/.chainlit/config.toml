@@ -1,0 +1,15 @@
+[project]
+# Nom affiché dans l'interface Chainlit
+name = "Chatbot de requêtes Excel"
+
+# Désactiver la télémétrie
+enable_telemetry = false
+
+[features]
+# Autoriser l'upload de fichiers par les utilisateurs
+multi_modal = true
+
+[UI]
+# Langue de l'interface (ex : "fr-FR", "en-US", "de-DE")
+# Voir : https://docs.chainlit.io/customisation/translation
+language = "fr-FR"

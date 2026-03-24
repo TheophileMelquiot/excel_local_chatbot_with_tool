@@ -15,14 +15,23 @@ pip install -r requirements.txt
 python en/chatbot.py
 ```
 
-### Version française
+### Version française (Gradio)
 
 ```bash
-pip install -r requirements.txt
+pip install -r fr/requirements.txt
 python fr/chatbot.py
 ```
 
 Then open **http://localhost:7860** in your browser.
+
+### Version française (Chainlit)
+
+```bash
+pip install -r fr/requirements.txt
+chainlit run fr/chatbot_chainlit.py --port 8000
+```
+
+Then open **http://localhost:8000** in your browser.
 
 ## How to use / Comment utiliser
 
@@ -57,6 +66,7 @@ Tapez `aide` dans le chat pour la liste complète des commandes, ou `colonnes` p
 | `en/excel_query_engine.py` | Core query engine — type inference, fuzzy column matching, multi-criteria search |
 | `fr/` | **Version française** du chatbot |
 | `fr/chatbot.py` | Interface chatbot Gradio + analyseur d'intentions (Français) |
+| `fr/chatbot_chainlit.py` | Interface chatbot Chainlit + analyseur d'intentions (Français) |
 | `fr/excel_query_engine.py` | Moteur de requêtes — inférence de type, correspondance floue, recherche multi-critères |
 | `requirements.txt` | Python dependencies / Dépendances Python |
 | `tests.py` | Unit & integration tests |
