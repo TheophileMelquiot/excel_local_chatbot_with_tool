@@ -108,6 +108,8 @@ def _load_llm_background():
             n_ctx=1024,
             n_threads=N_THREADS,
             n_gpu_layers=0,
+            use_mmap=True,          # chargement paresseux via memory-mapping
+            use_mlock=False,
             verbose=False,
         )
         print(f"✅ Modèle LLM chargé ({MODEL_FILENAME})")
